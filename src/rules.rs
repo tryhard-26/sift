@@ -100,7 +100,7 @@ pub fn defaults() -> Vec<Rule> {
         r("Next.js & Turbo build output", true, &[], &[".next", ".turbo"], None),
         r("Rust target dirs", true, &[], &["target"], Some("Cargo.toml")),
         r("Gradle caches", true, &[".gradle/caches"], &[], None),
-        r("Cargo registry", true, &[".cargo/registry"], &[], None),
+        r("Cargo registry & git cache", true, &[".cargo/registry", ".cargo/git"], &[], None),
         r("Xcode DerivedData", true, &["Library/Developer/Xcode/DerivedData"], &[], None),
         r("uv, pip & Puppeteer caches", true, &[".cache/uv", ".cache/pip", "Library/Caches/pip", ".cache/puppeteer", "Library/Caches/ms-playwright"], &[], None),
         r("Homebrew & Go caches", true, &["Library/Caches/Homebrew", "Library/Caches/go-build", ".cache/go-build"], &[], None),
@@ -117,11 +117,13 @@ pub fn defaults() -> Vec<Rule> {
     ]
 }
 
+#[derive(Serialize)]
 pub struct Rec {
     pub label: String,
     pub safe: bool,
     pub size: u64,
     pub paths: Vec<PathBuf>,
+    #[serde(skip)]
     pub on: bool,
 }
 

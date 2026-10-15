@@ -81,10 +81,18 @@ fn main() {
     if !root.is_dir() {
         die(format!("{}: not a directory", root.display()));
     }
-    let mut ex = cli.exclude;
+    // cloud-backed mounts: slow to stat, rm there deletes remote copies
+    let mut ex = vec!["CloudStorage".to_string(), "Mobile Documents".into()];
+    ex.extend(cli.exclude);
     ex.extend(cfg.exclude);
     let mut rules = rules::defaults();
     rules.extend(cfg.rules);
+
+    if env::var_os("RAYON_NUM_THREADS").is_none() {
+        let n = std::thread::available_parallelism().map_or(8, |n| n.get());
+        // io-bound, oversubscribe
+        let _ = rayon::ThreadPoolBuilder::new().num_threads(n * 4).build_global();
+    }
 
     if cli.json {
         let p = Prog::default();

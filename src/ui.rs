@@ -21,7 +21,7 @@ const ACC: Color = Color::Rgb(125, 220, 170);
 const TXT: Color = Color::Rgb(225, 228, 235);
 const DIM: Color = Color::Rgb(115, 120, 135);
 const EDGE: Color = Color::Rgb(58, 61, 74);
-const SEL: Color = Color::Rgb(38, 41, 54);
+const SEL: Color = Color::Rgb(48, 54, 72);
 const SAFE: Color = Color::Rgb(110, 210, 140);
 const WARN: Color = Color::Rgb(240, 180, 90);
 const BAD: Color = Color::Rgb(240, 105, 105);
@@ -148,6 +148,9 @@ struct App {
     tiles: Vec<(Rect, usize)>,
     list_area: Rect,
     rec_area: Rect,
+    rec_list: Rect,
+    /// rec index per list item (None = group header), each item is 2 rows tall
+    rec_rows: Vec<Option<usize>>,
     disk: Option<(u64, u64)>,
 }
 
@@ -172,6 +175,8 @@ impl App {
             tiles: vec![],
             list_area: Rect::default(),
             rec_area: Rect::default(),
+            rec_list: Rect::default(),
+            rec_rows: vec![],
             disk,
         }
     }
@@ -269,6 +274,16 @@ impl App {
                     }
                 } else if self.rec_area.contains(p) {
                     self.on_recs = true;
+                    if self.rec_list.contains(p) {
+                        let row = self.rlist.offset() + (p.y - self.rec_list.y) as usize / 2;
+                        if let Some(&Some(i)) = self.rec_rows.get(row) {
+                            // 2nd click on same row toggles
+                            if self.rsel == i {
+                                self.recs[i].on = !self.recs[i].on;
+                            }
+                            self.rsel = i;
+                        }
+                    }
                 }
             }
             _ => {}
@@ -423,14 +438,16 @@ impl App {
     }
 
     fn draw(&mut self, f: &mut Frame) {
-        let [head, stats, body, foot] = Layout::vertical([Length(1), Length(4), Min(6), Length(1)]).areas(f.area());
+        let sh = if f.area().width >= 100 { 4 } else { 1 };
+        let [head, stats, body, foot] = Layout::vertical([Length(1), Length(sh), Min(6), Length(1)]).areas(f.area());
         self.header(f, head);
         self.stats(f, stats);
         let wide = self.map && body.width >= 110;
+        let rw = (body.width * 2 / 5).clamp(30, 46);
         let cols = if wide {
-            Layout::horizontal([Percentage(30), Min(30), Length(46)]).split(body)
+            Layout::horizontal([Percentage(30), Min(30), Length(rw)]).split(body)
         } else {
-            Layout::horizontal([Min(30), Length(46)]).split(body)
+            Layout::horizontal([Min(30), Length(rw)]).split(body)
         };
         self.explorer(f, cols[0]);
         if wide {
@@ -480,6 +497,22 @@ impl App {
             sub += &format!(" · {} unreadable", self.errs);
         }
         cards.push((Line::from(" Scanned ".fg(DIM)), Line::from(human(self.root.size).fg(TXT).bold()), sub));
+        if a.height == 1 {
+            // narrow terminal: one line, short labels
+            let l = Line::from(vec![
+                " selected ".fg(DIM),
+                human(picked).fg(TXT).bold(),
+                "  ● ".fg(SAFE),
+                human(s).fg(TXT),
+                " safe".fg(DIM),
+                "  ● ".fg(WARN),
+                human(r).fg(TXT),
+                " review".fg(DIM),
+                "  scanned ".fg(DIM),
+                human(self.root.size).fg(TXT),
+            ]);
+            return f.render_widget(l, a);
+        }
         let areas = Layout::horizontal([Ratio(1, 4); 4]).split(a);
         for ((t, v, s), a) in cards.into_iter().zip(areas.iter()) {
             let p = Paragraph::new(vec![v, Line::from(s.fg(DIM))]).block(card(t, false).padding(ratatui::widgets::Padding::horizontal(1)));
@@ -500,15 +533,18 @@ impl App {
         let tot = cur.size.max(1) as f64;
         let w = inner.width as usize;
         let nw = w.saturating_sub(3 + 1 + 8 + 10);
+        let at = self.list.selected().filter(|_| !self.on_recs);
         let items: Vec<ListItem> = cur
             .kids
             .iter()
-            .map(|k| {
+            .enumerate()
+            .map(|(i, k)| {
                 let c = k.cat.col(1.0);
+                let dot = if at == Some(i) { "▌● ".fg(ACC) } else { " ● ".fg(c) };
                 let name = if k.dir { format!("{}/", k.name) } else { k.name.clone() };
                 let ns = if k.dir { Style::new().fg(TXT) } else { Style::new().fg(Color::Rgb(170, 174, 186)) };
                 ListItem::new(Line::from(vec![
-                    " ● ".fg(c),
+                    dot,
                     Span::styled(fit(&name, nw), ns),
                     " ".into(),
                     bar(k.size as f64 / tot, 8).fg(c),
@@ -516,7 +552,8 @@ impl App {
                 ]))
             })
             .collect();
-        let l = List::new(items).block(blk).highlight_style(Style::new().bg(SEL).add_modifier(Modifier::BOLD));
+        let hs = if self.on_recs { Style::new() } else { Style::new().bg(SEL).add_modifier(Modifier::BOLD) };
+        let l = List::new(items).block(blk).highlight_style(hs);
         f.render_stateful_widget(l, a, &mut self.list);
     }
 
@@ -531,9 +568,16 @@ impl App {
             self.recs.iter().flat_map(|r| r.paths.iter().map(move |p| (p.as_path(), if r.safe { SAFE } else { WARN }))).collect();
         let hf = |p: &Path| hot.iter().find(|(q, _)| p.starts_with(q)).map(|x| x.1);
         let tiles = treemap::draw(f.buffer_mut(), map, cur, self.list.selected(), &hf);
-        let mut cats: Vec<_> = crate::rules::Cat::ALL.into_iter().filter(|c| cur.kids.iter().any(|k| k.cat == *c)).collect();
-        cats.truncate(6);
-        let lg: Vec<Span> = cats.iter().flat_map(|c| [" ■ ".fg(c.col(1.0)), c.label().fg(DIM)]).collect();
+        let cats: Vec<_> = crate::rules::Cat::ALL.into_iter().filter(|c| cur.kids.iter().any(|k| k.cat == *c)).collect();
+        let mut lg: Vec<Span> = vec![];
+        let mut used = 0;
+        for c in cats {
+            used += 3 + c.label().len();
+            if used > legend.width as usize {
+                break;
+            }
+            lg.extend([" ■ ".fg(c.col(1.0)), c.label().fg(DIM)]);
+        }
         f.render_widget(Line::from(lg), legend);
         self.tiles = tiles;
     }
@@ -544,6 +588,8 @@ impl App {
         f.render_widget(blk, a);
         let [list, sum] = Layout::vertical([Min(1), Length(2)]).areas(inner);
         self.rec_area = a;
+        self.rec_list = list;
+        self.rec_rows.clear();
         let w = list.width as usize;
         let mut items = vec![];
         let mut at = 0;
@@ -555,21 +601,24 @@ impl App {
                 let pad = w.saturating_sub(t.len() + ts.len() + 1);
                 let hdr = Line::from(vec![" ".into(), t.fg(c).bg(Color::Rgb(32, 36, 42)), " ".repeat(pad).into(), ts.fg(DIM)]);
                 items.push(ListItem::new(Text::from(vec![Line::raw(""), hdr])));
+                self.rec_rows.push(None);
             }
             if i == self.rsel {
                 at = items.len();
             }
             let sz = format!("{:>9} ", human(r.size));
             let (mark, mc) = if r.on { ("■", if r.safe { SAFE } else { WARN }) } else { ("□", DIM) };
+            let cur = if i == self.rsel && self.on_recs { "▌".fg(ACC) } else { " ".into() };
             let lw = w.saturating_sub(4 + sz.len());
             let mut p = r.paths.first().map(|p| tilde(&self.home, p)).unwrap_or_default();
             if r.paths.len() > 1 {
                 p += &format!("  +{} more", r.paths.len() - 1);
             }
             items.push(ListItem::new(Text::from(vec![
-                Line::from(vec![format!(" {mark}  ").fg(mc), fit(&r.label, lw).fg(TXT), sz.fg(TXT)]),
-                Line::from(fit(&format!("    {p}"), w).fg(DIM)),
+                Line::from(vec![cur.clone(), format!("{mark}  ").fg(mc), fit(&r.label, lw).fg(TXT), sz.fg(TXT)]),
+                Line::from(vec![cur, fit(&format!("   {p}"), w - 1).fg(DIM)]),
             ])));
+            self.rec_rows.push(Some(i));
         }
         if items.is_empty() {
             f.render_widget(Paragraph::new("\n  nothing to clean up".fg(DIM)), list);
@@ -610,7 +659,16 @@ impl App {
             ("?", "help"),
             ("q", "quit"),
         ];
-        let l: Vec<Span> = keys.iter().flat_map(|(k, d)| [format!(" {k}").fg(ACC).bold(), format!(" {d} ").fg(DIM)]).collect();
+        let mut l: Vec<Span> = vec![];
+        let mut used = 0;
+        for (k, d) in keys {
+            used += k.chars().count() + d.len() + 3;
+            // keep "? help" visible on narrow terminals
+            if used + 8 > a.width as usize && k != "?" {
+                continue;
+            }
+            l.extend([format!(" {k}").fg(ACC).bold(), format!(" {d} ").fg(DIM)]);
+        }
         f.render_widget(Line::from(l), a);
     }
 

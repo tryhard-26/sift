@@ -73,27 +73,24 @@ pub fn draw(buf: &mut Buffer, a: Rect, n: &Node, sel: Option<usize>, hot: Hot) -
     tiles.into_iter().map(|(i, r)| (r, i)).collect()
 }
 
-fn fill(buf: &mut Buffer, r: Rect, bg: Color, hatch: Option<Color>) {
+fn fill(buf: &mut Buffer, r: Rect, bg: Color) {
     for y in r.top()..r.bottom() {
         for x in r.left()..r.right() {
-            let c = &mut buf[(x, y)];
-            c.reset();
-            c.set_bg(bg);
-            if let Some(h) = hatch {
-                c.set_char('╱').set_fg(h);
-            }
+            buf[(x, y)].reset();
+            buf[(x, y)].set_bg(bg);
         }
     }
 }
 
 fn tile(buf: &mut Buffer, r: Rect, k: &Node, sel: bool, hot: Hot) {
-    let h = hot(&k.path).map(|c| dim(c, 0.55));
+    let h = hot(&k.path);
     if r.width < 4 || r.height < 3 {
-        fill(buf, r, k.cat.col(if sel { 0.9 } else { 0.42 }), h);
+        fill(buf, r, k.cat.col(if sel { 0.9 } else { 0.42 }));
         return;
     }
-    let fg = if sel { Color::White } else { k.cat.col(0.95) };
-    fill(buf, r, k.cat.col(if sel { 0.26 } else { 0.15 }), h);
+    // cleanup candidates get a safe/warn border instead of the category colour
+    let fg = if sel { Color::White } else { h.unwrap_or(k.cat.col(0.95)) };
+    fill(buf, r, k.cat.col(if sel { 0.26 } else { 0.15 }));
     let st = Style::new().fg(fg);
     let (x0, x1, y0, y1) = (r.left(), r.right() - 1, r.top(), r.bottom() - 1);
     let [tl, tr, bl, br, hz, vt] = if sel { ['┏', '┓', '┗', '┛', '━', '┃'] } else { ['╭', '╮', '╰', '╯', '─', '│'] };
@@ -124,17 +121,11 @@ fn tile(buf: &mut Buffer, r: Rect, k: &Node, sel: bool, hot: Hot) {
     for (j, (i, rr)) in squarify(&sizes, inner).into_iter().enumerate() {
         let c = &k.kids[i];
         let g = Rect { width: rr.width.saturating_sub((rr.right() < inner.right()) as u16), ..rr };
-        fill(buf, g, c.cat.col(if j % 2 == 0 { 0.3 } else { 0.38 }), hot(&c.path).map(|c| dim(c, 0.7)));
+        fill(buf, g, c.cat.col(if j % 2 == 0 { 0.3 } else { 0.38 }));
         if g.width >= 4 {
-            buf.set_stringn(g.x, g.y, &c.name, g.width as usize, Style::new().fg(c.cat.col(1.0)));
+            let fg = hot(&c.path).unwrap_or(c.cat.col(1.0));
+            buf.set_stringn(g.x, g.y, &c.name, g.width as usize, Style::new().fg(fg));
         }
-    }
-}
-
-fn dim(c: Color, k: f32) -> Color {
-    match c {
-        Color::Rgb(r, g, b) => Color::Rgb((r as f32 * k) as u8, (g as f32 * k) as u8, (b as f32 * k) as u8),
-        c => c,
     }
 }
 

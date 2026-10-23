@@ -135,7 +135,8 @@ pub fn recommend(root: &Node, home: &Path, rules: &[Rule]) -> Vec<Rec> {
     let mut out: Vec<Rec> = rules
         .iter()
         .zip(hits)
-        .filter(|(_, (s, _))| *s > 0)
+        // sub-MB hits are noise
+        .filter(|(_, (s, _))| *s >= 1_000_000)
         .map(|(r, (size, paths))| Rec { label: r.label.clone(), safe: r.safe, size, paths, on: r.safe })
         .collect();
     out.sort_by(|a, b| b.safe.cmp(&a.safe).then(b.size.cmp(&a.size)));
@@ -164,7 +165,7 @@ mod t {
     use super::*;
 
     fn d(name: &str, path: &str, size: u64, kids: Vec<Node>) -> Node {
-        Node { name: name.into(), path: path.into(), size, files: 1, dir: true, cat: Cat::Other, kids }
+        Node { name: name.into(), path: path.into(), size: size * 1_000_000, files: 1, dir: true, cat: Cat::Other, kids }
     }
 
     #[test]
@@ -178,8 +179,8 @@ mod t {
         ]);
         let rs = recommend(&tree, Path::new("/h"), &defaults());
         assert_eq!(rs.len(), 2);
-        assert_eq!((rs[0].label.as_str(), rs[0].size, rs[0].on), ("npm cache", 10, true));
-        assert_eq!((rs[1].label.as_str(), rs[1].size, rs[1].on), ("node_modules", 13, false));
+        assert_eq!((rs[0].label.as_str(), rs[0].size, rs[0].on), ("npm cache", 10_000_000, true));
+        assert_eq!((rs[1].label.as_str(), rs[1].size, rs[1].on), ("node_modules", 13_000_000, false));
         assert_eq!(classify("x.GGUF", false), Some(Cat::Ai));
     }
 }
